@@ -167,11 +167,27 @@ pub struct NiimbotPacket {
 impl NiimbotPacket {
     /// Build a packet from a raw command byte and payload.
     pub fn new(command: impl Into<u8>, data: impl Into<Vec<u8>>) -> Self {
-        Self {
-            command: command.into(),
-            data: data.into(),
-            wire_prefix: None,
+        Self::try_new(command, data).unwrap_or_else(|len| {
+            panic!(
+                "NiimbotPacket data payload too large: {len} bytes"
+            )
+        })
+    }
+
+    /// Fallible version of [`Self::new`].
+    ///
+    /// Returns `Err(len)` with the offending payload length if `data` is
+    /// longer than 255 bytes, instead of panicking.
+    pub fn try_new(command: impl Into<u8>, data: impl Into<Vec<u8>>) -> Result<Self, usize> {
+        let data = data.into();
+        if data.len() > u8::MAX as usize {
+            return Err(data.len());
         }
+        Ok(Self {
+            command: command.into(),
+            data,
+            wire_prefix: None,
+        })
     }
 
     /// Build the `Connect` handshake request.
@@ -518,6 +534,25 @@ mod tests {
         assert_eq!(decoded.ribbon_rfid_success, Some(true));
         assert_eq!(decoded.ribbon_inserted, Some(false));
         assert_eq!(decoded.wifi_rssi, None);
+    }
+
+    #[test]
+    fn try_new_rejects_oversized_payload() {
+        let data = vec![0u8; 256];
+        assert_eq!(NiimbotPacket::try_new(0xD9u8, data), Err(256));
+    }
+
+    #[test]
+    fn try_new_accepts_max_len_payload() {
+        let data = vec![0u8; 255];
+        assert!(NiimbotPacket::try_new(0xD9u8, data).is_ok());
+    }
+
+    #[test]
+    #[should_panic(expected = "too large")]
+    fn new_panics_on_oversized_payload() {
+        let data = vec![0u8; 300];
+        let _ = NiimbotPacket::new(0xD9u8, data);
     }
 
     #[test]
