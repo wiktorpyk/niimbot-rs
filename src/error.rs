@@ -10,6 +10,10 @@ pub enum AppError {
     #[error("serial port error: {0}")]
     Serial(#[from] tokio_serial::Error),
 
+    /// Failed to enumerate serial ports during auto-detection.
+    #[error("serial port enumeration error: {0}")]
+    SerialPortEnum(serialport::Error),
+
     /// A read or write on the open serial port failed.
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
@@ -26,6 +30,10 @@ pub enum AppError {
     /// a reply.
     #[error("notification stream ended unexpectedly")]
     StreamEnded,
+
+    /// No NIIMBOT printer was found during auto-detection.
+    #[error("no NIIMBOT printer found")]
+    NoPrinterFound,
 }
 
 /// Convenience alias for `Result<T, AppError>`.

@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use log::{debug, warn};
+use serialport::SerialPortType;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 
@@ -27,6 +28,35 @@ pub fn open_port(port_path: &str) -> Result<SerialStream> {
         .timeout(Duration::from_secs(1))
         .open_native_async()
         .map_err(AppError::from)
+}
+
+/// Automatically detect a connected NIIMBOT printer's USB serial port.
+///
+/// This function scans available serial ports and looks for a USB device with
+/// vendor ID `0x3513` (NIIMBOT). Returns the port path if found, or an error
+/// if no matching device is detected.
+///
+/// The printer must be plugged in via USB and turned off (charge mode) for
+/// the port to appear.
+pub fn detect_printer_port() -> Result<String> {
+    const NIIMBOT_VENDOR_ID: u16 = 0x3513;
+
+    let ports = serialport::available_ports()
+        .map_err(|e| AppError::SerialPortEnum(e.clone()))?;
+
+    for port in ports {
+        if let SerialPortType::UsbPort(info) = &port.port_type {
+            if info.vid == NIIMBOT_VENDOR_ID {
+                debug!(
+                    "found NIIMBOT printer: {} (VID: {:04x}, PID: {:04x})",
+                    port.port_name, info.vid, info.pid
+                );
+                return Ok(port.port_name);
+            }
+        }
+    }
+
+    Err(AppError::NoPrinterFound)
 }
 
 /// A connected NIIMBOT printer: an open serial port, ready to send and

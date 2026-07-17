@@ -12,6 +12,11 @@ thiserror = "2.0.18"
 log = "0.4.33"
 env_logger = "0.11.11"
 tokio-serial = "5.5.0"
+serialport = "4.7.0"
 
 [[example]]
 name = "heartbeat_monitor"
+
+[lints.clippy]
+pedantic = "warn"
+nursery = "warn"

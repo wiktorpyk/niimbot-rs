@@ -7,8 +7,6 @@
 //! ```text
 //! cargo run --example heartbeat_monitor
 //! ```
-//!
-//! Adjust [`PRINTER_PORT`] below to match your printer's serial device.
 
 use std::time::Duration;
 
@@ -16,10 +14,8 @@ use log::info;
 
 use niimbot_rs::error::Result;
 use niimbot_rs::protocol::{decode_heartbeat, HeartbeatType, NiimbotPacket, ResponseCommandId};
-use niimbot_rs::serial_client::{open_port, PrinterConnection};
+use niimbot_rs::serial_client::{detect_printer_port, open_port, PrinterConnection};
 
-/// USB serial device for the printer's connection.
-const PRINTER_PORT: &str = "/dev/ttyACM0";
 /// How long to wait for a reply to any single request.
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Timeout for the initial connect handshake.
@@ -31,8 +27,13 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2);
 async fn main() -> Result<()> {
     env_logger::init();
 
-    info!("opening printer serial port at {PRINTER_PORT}...");
-    let port = open_port(PRINTER_PORT)?;
+    let printer_port = std::env::var("PRINTER_PORT")
+        .ok()
+        .or_else(|| detect_printer_port().ok())
+        .expect("Failed to detect printer port. Set PRINTER_PORT environment variable or ensure printer is connected.");
+    
+    info!("opening printer serial port at {printer_port}...");
+    let port = open_port(&printer_port)?;
 
     let mut printer = PrinterConnection::connect(port);
     info!("connected, sending handshake...");

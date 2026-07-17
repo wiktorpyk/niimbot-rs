@@ -19,3 +19,4 @@ pub mod protocol;
 pub mod serial_client;
 
 pub use error::{AppError, Result};
+pub use serial_client::{detect_printer_port, open_port, PrinterConnection};
