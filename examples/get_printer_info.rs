@@ -50,11 +50,16 @@ async fn main() -> Result<()> {
     let mut printer = PrinterConnection::connect(port);
     info!("connected, sending handshake...");
 
-    printer
+    let connect_response = printer
         .send_and_wait(&NiimbotPacket::connect(), HANDSHAKE_TIMEOUT, |p| {
             matches!(p.response_id(), ResponseCommandId::Connect)
         })
         .await?;
+    printer.note_connect_reply(&connect_response);
+    match niimbot_rs::protocol::decode_connect(&connect_response) {
+        Some(result) => println!("Connect response code: {result}"),
+        None => println!("Connect response code: {:02x?} (unrecognized)", connect_response.data()),
+    }
     info!("handshake complete");
 
     for info_type in INFO_TYPES {

@@ -13,7 +13,7 @@ use std::time::Duration;
 use log::info;
 
 use niimbot_rs::error::Result;
-use niimbot_rs::protocol::{decode_heartbeat, HeartbeatType, NiimbotPacket, ResponseCommandId};
+use niimbot_rs::protocol::{decode_connect, decode_heartbeat, HeartbeatType, NiimbotPacket, ResponseCommandId};
 use niimbot_rs::serial_client::{detect_printer_port, open_port, PrinterConnection};
 
 /// How long to wait for a reply to any single request.
@@ -43,7 +43,8 @@ async fn main() -> Result<()> {
             matches!(p.response_id(), ResponseCommandId::Connect)
         })
         .await?;
-    info!("handshake complete, result byte = {:?}", connect_reply.data().first());
+    printer.note_connect_reply(&connect_reply);
+    info!("handshake complete, result = {:?}", decode_connect(&connect_reply));
 
     negotiate_protocol_version(&mut printer).await;
 

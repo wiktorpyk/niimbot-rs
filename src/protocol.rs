@@ -102,6 +102,67 @@ impl ResponseCommandId {
     }
 }
 
+/// Result byte carried in a [`ResponseCommandId::Connect`] reply's data
+/// payload, indicating the connection state the printer established (or
+/// didn't) in response to a [`NiimbotPacket::connect`] request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ConnectResult {
+    Disconnect = 0,
+    Connected = 1,
+    ConnectedNew = 2,
+    ConnectedV3 = 3,
+}
+
+impl ConnectResult {
+    /// Decode a raw result byte, returning `None` for unrecognized values.
+    pub fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0 => Some(Self::Disconnect),
+            1 => Some(Self::Connected),
+            2 => Some(Self::ConnectedNew),
+            3 => Some(Self::ConnectedV3),
+            _ => None,
+        }
+    }
+
+    /// True for any variant indicating an established connection (i.e.
+    /// anything other than [`Self::Disconnect`]).
+    pub fn is_connected(self) -> bool {
+        !matches!(self, Self::Disconnect)
+    }
+}
+
+impl From<ConnectResult> for u8 {
+    fn from(result: ConnectResult) -> Self {
+        result as u8
+    }
+}
+
+impl fmt::Display for ConnectResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Disconnect => "Disconnect",
+            Self::Connected => "Connected",
+            Self::ConnectedNew => "ConnectedNew",
+            Self::ConnectedV3 => "ConnectedV3",
+        };
+        write!(f, "{} - {label}", *self as u8)
+    }
+}
+
+/// Decode a [`ResponseCommandId::Connect`] reply's payload into a
+/// [`ConnectResult`].
+///
+/// Returns `None` if `packet` isn't a `Connect` reply, has an empty
+/// payload, or its result byte isn't a recognized [`ConnectResult`] value.
+pub fn decode_connect(packet: &NiimbotPacket) -> Option<ConnectResult> {
+    if !matches!(packet.response_id(), ResponseCommandId::Connect) {
+        return None;
+    }
+    ConnectResult::from_byte(*packet.data().first()?)
+}
+
 /// Sent with [`RequestCommandId::PrinterInfo`] as the single data byte to
 /// select which printer parameter is being queried.
 ///
@@ -561,6 +622,18 @@ mod tests {
         let raw = NiimbotPacket::printer_info(&[PrinterInfoType::SerialNumber.into()]);
         assert_eq!(typed, raw);
         assert_eq!(typed.data(), &[11]);
+    }
+
+    #[test]
+    fn decode_connect_rejects_unknown_byte_and_wrong_command() {
+        let unknown = NiimbotPacket::new(0xC2u8, vec![99]);
+        assert_eq!(decode_connect(&unknown), None);
+
+        let wrong_command = NiimbotPacket::new(0xDDu8, vec![1]);
+        assert_eq!(decode_connect(&wrong_command), None);
+
+        let empty = NiimbotPacket::new(0xC2u8, vec![]);
+        assert_eq!(decode_connect(&empty), None);
     }
 
     #[test]

@@ -10,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 
 use crate::error::{AppError, Result};
-use crate::protocol::{NiimbotPacket, PacketDecoder, PrinterInfoType, RequestCommandId};
+use crate::protocol::{ConnectResult, NiimbotPacket, PacketDecoder, PrinterInfoType, RequestCommandId};
 
 /// Baud rate used for the USB serial link. NIIMBOT printers don't strictly
 /// enforce a specific rate over USB (it's a virtual serial port over a CDC
@@ -65,17 +65,22 @@ pub struct PrinterConnection {
     port: SerialStream,
     decoder: PacketDecoder,
     protocol_version: u8,
+    /// Result of the most recent `Connect` handshake.
+    connect_result: Option<ConnectResult>,
 }
 
 impl PrinterConnection {
     /// Wrap an already-open serial port. The protocol version defaults to
     /// `1` until [`Self::set_protocol_version`] is called, e.g. after
-    /// negotiating it via a `PrinterInfo` request.
+    /// negotiating it via a `PrinterInfo` request. The connection status is
+    /// unknown (`None`) until a `Connect` reply is recorded via
+    /// [`Self::set_connect_result`] or [`Self::note_connect_reply`].
     pub fn connect(port: SerialStream) -> Self {
         Self {
             port,
             decoder: PacketDecoder::new(),
             protocol_version: 1, // Safe fallback.
+            connect_result: None,
         }
     }
 
@@ -88,6 +93,36 @@ impl PrinterConnection {
     /// the printer.
     pub fn set_protocol_version(&mut self, version: u8) {
         self.protocol_version = version;
+    }
+
+    /// The result of the most recent `Connect` handshake, if one has been
+    /// recorded. `None` means no `Connect` reply has been observed yet.
+    pub fn connect_result(&self) -> Option<ConnectResult> {
+        self.connect_result
+    }
+
+    /// True if the most recently recorded `Connect` result indicates an
+    /// established connection (i.e. anything other than
+    /// [`ConnectResult::Disconnect`]). False if the result was
+    /// `Disconnect`, or none has been recorded yet.
+    pub fn is_connected(&self) -> bool {
+        matches!(self.connect_result, Some(r) if r.is_connected())
+    }
+
+    /// Explicitly record the current connection status, e.g. after decoding
+    /// a `Connect` reply with [`crate::protocol::decode_connect`].
+    pub fn set_connect_result(&mut self, result: ConnectResult) {
+        self.connect_result = Some(result);
+    }
+
+    /// Convenience wrapper around [`Self::set_connect_result`] that decodes
+    /// the status directly from a `Connect` reply packet. Does nothing (and
+    /// leaves the previously recorded status untouched) if `packet` isn't a
+    /// recognized `Connect` reply.
+    pub fn note_connect_reply(&mut self, packet: &NiimbotPacket) {
+        if let Some(result) = crate::protocol::decode_connect(packet) {
+            self.set_connect_result(result);
+        }
     }
 
     /// Serialize and send a packet.
