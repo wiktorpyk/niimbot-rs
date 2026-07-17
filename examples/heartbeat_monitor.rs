@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use log::info;
 
-use niimbot_rs::error::Result;
+use niimbot_rs::error::{AppError, Result};
 use niimbot_rs::protocol::{decode_connect, decode_heartbeat, HeartbeatType, NiimbotPacket, ResponseCommandId};
 use niimbot_rs::serial_client::{detect_printer_port, open_port, PrinterConnection};
 
@@ -112,8 +112,15 @@ fn find_tlv_value(data: &[u8], key: u8) -> Option<u8> {
 }
 
 /// Send a heartbeat every [`HEARTBEAT_INTERVAL`] and print the decoded reply directly to console.
-/// Individual heartbeat failures (timeout, transport error) are printed to stderr and
-/// do not stop the loop.
+///
+/// Each heartbeat goes through [`PrinterConnection::send_and_wait_recover`],
+/// which already retries once (resend `Connect`, then resend the heartbeat)
+/// for non-fatal failures. So any error seen here is one of:
+/// - the printer was physically unplugged, or
+/// - the retry itself failed to recover the connection.
+///
+/// Either way, that's not worth looping on: the error is printed to stderr
+/// and this function returns it, stopping the loop.
 async fn run_heartbeat_loop(printer: &mut PrinterConnection) -> Result<()> {
     let mut interval = tokio::time::interval(HEARTBEAT_INTERVAL);
 
@@ -127,8 +134,14 @@ async fn run_heartbeat_loop(printer: &mut PrinterConnection) -> Result<()> {
         };
 
         let request = NiimbotPacket::heartbeat(heartbeat_type);
+        // `send_and_wait_recover` already does one round of recovery for
+        // non-fatal failures (wait, resend connect, resend this heartbeat).
+        // So whatever comes back here is either a heartbeat reply or a
+        // failure worth stopping for: either the printer was physically
+        // unplugged (nothing to retry against), or recovery itself failed
+        // (printer reported disconnected, or didn't reply at all).
         let reply = printer
-            .send_and_wait(&request, RESPONSE_TIMEOUT, |p| p.response_id().is_heartbeat_reply())
+            .send_and_wait_recover(&request, RESPONSE_TIMEOUT, |p| p.response_id().is_heartbeat_reply())
             .await;
 
         // Using direct print macros instead of log macros so these
@@ -138,7 +151,14 @@ async fn run_heartbeat_loop(printer: &mut PrinterConnection) -> Result<()> {
                 Some(data) => println!("heartbeat ok: {data:?}"),
                 None => println!("heartbeat ok (payload not decodable, {} bytes)", packet.data().len()),
             },
-            Err(e) => eprintln!("heartbeat failed: {e}"),
+            Err(e @ AppError::PrinterUnplugged(_)) => {
+                eprintln!("printer unplugged, stopping: {e}");
+                return Err(e);
+            }
+            Err(e) => {
+                eprintln!("heartbeat failed and could not be recovered, stopping: {e}");
+                return Err(e);
+            }
         }
     }
 }

@@ -10,12 +10,24 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 
 use crate::error::{AppError, Result};
-use crate::protocol::{ConnectResult, NiimbotPacket, PacketDecoder, PrinterInfoType, RequestCommandId};
+use crate::protocol::{
+    decode_connect, ConnectResult, NiimbotPacket, PacketDecoder, PrinterInfoType, RequestCommandId,
+    ResponseCommandId,
+};
 
 /// Baud rate used for the USB serial link. NIIMBOT printers don't strictly
 /// enforce a specific rate over USB (it's a virtual serial port over a CDC
 /// interface), but a value must still be supplied to open the port.
 const BAUD_RATE: u32 = 115200;
+
+/// How long to wait before resending the `Connect` handshake after a
+/// non-fatal request/reply failure (timeout, malformed reply, etc.), to
+/// give the printer a moment to recover before retrying.
+const RECOVERY_DELAY: Duration = Duration::from_millis(500);
+
+/// Timeout for the `Connect` handshake sent as part of recovering from a
+/// non-fatal request/reply failure in [`PrinterConnection::send_and_wait_recover`].
+const RECOVERY_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Open the USB serial port for a connected printer.
 ///
@@ -179,6 +191,60 @@ impl PrinterConnection {
     ) -> Result<NiimbotPacket> {
         self.send(packet).await?;
         self.wait_for(timeout, predicate).await
+    }
+
+    /// Send `packet` and wait for a reply matching `predicate`, with one
+    /// level of automatic recovery from non-fatal failures.
+    ///
+    /// - If the initial exchange fails with [`AppError::PrinterUnplugged`],
+    ///   that error is returned immediately with **no retry**: the port is
+    ///   physically gone, so there's nothing to resend to.
+    /// - For any other error (timeout, malformed reply, transient I/O
+    ///   error), this waits briefly, resends the `Connect` handshake, and
+    ///   then:
+    ///   - if the printer reports an established connection
+    ///     ([`ConnectResult::is_connected`]), resends the original `packet`
+    ///     and returns that result;
+    ///   - otherwise (the printer reports [`ConnectResult::Disconnect`], the
+    ///     handshake itself fails, or it times out), gives up and returns
+    ///     [`AppError::ConnectionLost`] (or the handshake's own error, if it
+    ///     was an unplug).
+    pub async fn send_and_wait_recover(
+        &mut self,
+        packet: &NiimbotPacket,
+        timeout: Duration,
+        predicate: impl Fn(&NiimbotPacket) -> bool + Clone,
+    ) -> Result<NiimbotPacket> {
+        match self.send_and_wait(packet, timeout, predicate.clone()).await {
+            Ok(reply) => Ok(reply),
+            Err(e @ AppError::PrinterUnplugged(_)) => Err(e),
+            Err(first_err) => {
+                warn!("request failed ({first_err}), waiting and resending connect handshake...");
+                tokio::time::sleep(RECOVERY_DELAY).await;
+
+                let connect_reply = self
+                    .send_and_wait(&NiimbotPacket::connect(), RECOVERY_HANDSHAKE_TIMEOUT, |p| {
+                        matches!(p.response_id(), ResponseCommandId::Connect)
+                    })
+                    .await?;
+                self.note_connect_reply(&connect_reply);
+
+                match decode_connect(&connect_reply) {
+                    Some(result) if result.is_connected() => {
+                        debug!("reconnected ({result}), resending original request");
+                        self.send_and_wait(packet, timeout, predicate).await
+                    }
+                    Some(result) => {
+                        warn!("printer reported {result} after recovery attempt, giving up");
+                        Err(AppError::ConnectionLost)
+                    }
+                    None => {
+                        warn!("connect reply had no usable result after recovery attempt, giving up");
+                        Err(AppError::ConnectionLost)
+                    }
+                }
+            }
+        }
     }
 
     /// Query a single [`PrinterInfoType`] parameter and return the reply's
