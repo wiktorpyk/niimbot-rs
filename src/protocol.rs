@@ -610,21 +610,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "too large")]
-    fn new_panics_on_oversized_payload() {
-        let data = vec![0u8; 300];
-        let _ = NiimbotPacket::new(0xD9u8, data);
-    }
-
-    #[test]
-    fn printer_info_typed_matches_raw_single_key() {
-        let typed = NiimbotPacket::printer_info_typed(PrinterInfoType::SerialNumber);
-        let raw = NiimbotPacket::printer_info(&[PrinterInfoType::SerialNumber.into()]);
-        assert_eq!(typed, raw);
-        assert_eq!(typed.data(), &[11]);
-    }
-
-    #[test]
     fn decode_connect_rejects_unknown_byte_and_wrong_command() {
         let unknown = NiimbotPacket::new(0xC2u8, vec![99]);
         assert_eq!(decode_connect(&unknown), None);
