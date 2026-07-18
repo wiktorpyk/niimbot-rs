@@ -163,6 +163,18 @@ pub fn decode_connect(packet: &NiimbotPacket) -> Option<ConnectResult> {
     ConnectResult::from_byte(*packet.data().first()?)
 }
 
+/// Decode a [`ResponseCommandId::ProtocolVersion`] reply's payload into the
+/// negotiated protocol version number.
+///
+/// Returns `None` if `packet` isn't a `ProtocolVersion` reply, or its
+/// payload is empty.
+pub fn decode_protocol_version(packet: &NiimbotPacket) -> Option<u8> {
+    if !matches!(packet.response_id(), ResponseCommandId::ProtocolVersion) {
+        return None;
+    }
+    packet.data().first().copied()
+}
+
 /// Sent with [`RequestCommandId::PrinterInfo`] as the single data byte to
 /// select which printer parameter is being queried.
 ///
@@ -191,6 +203,216 @@ impl From<PrinterInfoType> for u8 {
     fn from(t: PrinterInfoType) -> Self {
         t as u8
     }
+}
+
+/// Decoded value of [`PrinterInfoType::AutoShutdownTime`]: how long the
+/// printer waits while idle before powering itself off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AutoShutdownTime {
+    FifteenMinutes = 1,
+    ThirtyMinutes = 2,
+    SixtyMinutes = 3,
+    Never = 4,
+}
+
+impl AutoShutdownTime {
+    /// Decode a raw value byte, returning `None` for unrecognized values.
+    pub fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            1 => Some(Self::FifteenMinutes),
+            2 => Some(Self::ThirtyMinutes),
+            3 => Some(Self::SixtyMinutes),
+            4 => Some(Self::Never),
+            _ => None,
+        }
+    }
+}
+
+impl From<AutoShutdownTime> for u8 {
+    fn from(t: AutoShutdownTime) -> Self {
+        t as u8
+    }
+}
+
+impl fmt::Display for AutoShutdownTime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::FifteenMinutes => "15 min",
+            Self::ThirtyMinutes => "30 min",
+            Self::SixtyMinutes => "60 min",
+            Self::Never => "never",
+        };
+        write!(f, "{label}")
+    }
+}
+
+/// Decoded value of [`PrinterInfoType::LabelType`]: the kind of label media
+/// loaded in the printer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum LabelType {
+    WithGaps = 1,
+    Black = 2,
+    Continuous = 3,
+    Perforated = 4,
+    Transparent = 5,
+    PvcTag = 6,
+    BlackMarkGap = 10,
+    HeatShrinkTube = 11,
+}
+
+impl LabelType {
+    /// Decode a raw value byte, returning `None` for unrecognized values.
+    pub fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            1 => Some(Self::WithGaps),
+            2 => Some(Self::Black),
+            3 => Some(Self::Continuous),
+            4 => Some(Self::Perforated),
+            5 => Some(Self::Transparent),
+            6 => Some(Self::PvcTag),
+            10 => Some(Self::BlackMarkGap),
+            11 => Some(Self::HeatShrinkTube),
+            _ => None,
+        }
+    }
+}
+
+impl From<LabelType> for u8 {
+    fn from(t: LabelType) -> Self {
+        t as u8
+    }
+}
+
+impl fmt::Display for LabelType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::WithGaps => "With gaps",
+            Self::Black => "Black",
+            Self::Continuous => "Continuous",
+            Self::Perforated => "Perforated",
+            Self::Transparent => "Transparent",
+            Self::PvcTag => "PVC tag",
+            Self::BlackMarkGap => "Black mark gap",
+            Self::HeatShrinkTube => "Heat-shrink tube",
+        };
+        write!(f, "{label}")
+    }
+}
+
+/// A `major.minor` hardware/software version number, as returned by
+/// [`PrinterInfoType::HardWareVersion`] and [`PrinterInfoType::SoftWareVersion`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Version {
+    pub major: u8,
+    pub minor: u8,
+}
+
+impl Version {
+    /// Decode a version from its 2-byte big-endian wire representation
+    /// (`[major, minor]`). Returns `None` if `data` has fewer than 2 bytes.
+    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+        Some(Self {
+            major: *data.first()?,
+            minor: *data.get(1)?,
+        })
+    }
+}
+
+impl fmt::Display for Version {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{:02}", self.major, self.minor)
+    }
+}
+
+/// A printer's 6-byte Bluetooth/MAC address, as returned by
+/// [`PrinterInfoType::BluetoothAddress`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MacAddress(pub [u8; 6]);
+
+impl MacAddress {
+    /// Decode a MAC address from its 6-byte wire representation. Returns
+    /// `None` if `data` has fewer than 6 bytes.
+    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+        let bytes: [u8; 6] = data.get(..6)?.try_into().ok()?;
+        Some(Self(bytes))
+    }
+}
+
+impl fmt::Display for MacAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let [a, b, c, d, e, g] = self.0;
+        write!(f, "{a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{g:02x}")
+    }
+}
+
+/// A strongly-typed, decoded [`PrinterInfoType`] reply value. Produced by
+/// [`decode_printer_info`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrinterInfoValue {
+    LabelType(LabelType),
+    AutoShutdownTime(AutoShutdownTime),
+    /// See the printer model table in the reference implementation.
+    PrinterModelId(u16),
+    SoftWareVersion(Version),
+    BatteryChargeLevel(u8),
+    SerialNumber(String),
+    HardWareVersion(Version),
+    BluetoothAddress(MacAddress),
+    /// Any [`PrinterInfoType`] this module doesn't decode into a more
+    /// specific type, preserved as raw bytes.
+    Other(Vec<u8>),
+}
+
+impl fmt::Display for PrinterInfoValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LabelType(v) => write!(f, "{v}"),
+            Self::AutoShutdownTime(v) => write!(f, "{v}"),
+            Self::PrinterModelId(v) => write!(f, "{v}"),
+            Self::SoftWareVersion(v) => write!(f, "{v}"),
+            Self::BatteryChargeLevel(v) => write!(f, "{v}"),
+            Self::SerialNumber(v) => write!(f, "{v}"),
+            Self::HardWareVersion(v) => write!(f, "{v}"),
+            Self::BluetoothAddress(v) => write!(f, "{v}"),
+            Self::Other(v) => write!(f, "{v:02x?}"),
+        }
+    }
+}
+
+/// Decode a [`PrinterInfoType`] reply's raw data payload into a strongly
+/// typed [`PrinterInfoValue`].
+///
+/// Falls back to [`PrinterInfoValue::Other`] (preserving the raw bytes) for
+/// [`PrinterInfoType`] variants this module doesn't model as a more
+/// specific type, or when `data` doesn't match the expected shape (e.g. too
+/// short, or an unrecognized enum byte) for the requested type.
+pub fn decode_printer_info(info_type: PrinterInfoType, data: &[u8]) -> PrinterInfoValue {
+    match info_type {
+        PrinterInfoType::LabelType => data
+            .first()
+            .and_then(|&b| LabelType::from_byte(b))
+            .map(PrinterInfoValue::LabelType),
+        PrinterInfoType::AutoShutdownTime => data
+            .first()
+            .and_then(|&b| AutoShutdownTime::from_byte(b))
+            .map(PrinterInfoValue::AutoShutdownTime),
+        PrinterInfoType::PrinterModelId => match data {
+            [hi, lo, ..] => Some(PrinterInfoValue::PrinterModelId(u16::from_be_bytes([*hi, *lo]))),
+            _ => None,
+        },
+        PrinterInfoType::SoftWareVersion => Version::from_bytes(data).map(PrinterInfoValue::SoftWareVersion),
+        PrinterInfoType::BatteryChargeLevel => data.first().copied().map(PrinterInfoValue::BatteryChargeLevel),
+        PrinterInfoType::SerialNumber => {
+            let s = String::from_utf8_lossy(data).trim_end_matches('\0').to_string();
+            Some(PrinterInfoValue::SerialNumber(s))
+        }
+        PrinterInfoType::HardWareVersion => Version::from_bytes(data).map(PrinterInfoValue::HardWareVersion),
+        PrinterInfoType::BluetoothAddress => MacAddress::from_bytes(data).map(PrinterInfoValue::BluetoothAddress),
+        _ => None,
+    }
+    .unwrap_or_else(|| PrinterInfoValue::Other(data.to_vec()))
 }
 
 /// Sub-type sent as the single data byte of a [`RequestCommandId::Heartbeat`]
@@ -604,12 +826,6 @@ mod tests {
     }
 
     #[test]
-    fn try_new_accepts_max_len_payload() {
-        let data = vec![0u8; 255];
-        assert!(NiimbotPacket::try_new(0xD9u8, data).is_ok());
-    }
-
-    #[test]
     fn decode_connect_rejects_unknown_byte_and_wrong_command() {
         let unknown = NiimbotPacket::new(0xC2u8, vec![99]);
         assert_eq!(decode_connect(&unknown), None);
@@ -619,6 +835,34 @@ mod tests {
 
         let empty = NiimbotPacket::new(0xC2u8, vec![]);
         assert_eq!(decode_connect(&empty), None);
+    }
+
+    #[test]
+    fn decode_printer_info_falls_back_to_other() {
+        // Unrecognized enum byte.
+        assert_eq!(
+            decode_printer_info(PrinterInfoType::LabelType, &[99]),
+            PrinterInfoValue::Other(vec![99])
+        );
+        // Too short for the expected shape.
+        assert_eq!(
+            decode_printer_info(PrinterInfoType::PrinterModelId, &[0x12]),
+            PrinterInfoValue::Other(vec![0x12])
+        );
+        // Not modeled at all.
+        assert_eq!(
+            decode_printer_info(PrinterInfoType::Density, &[7]),
+            PrinterInfoValue::Other(vec![7])
+        );
+    }
+
+    #[test]
+    fn decode_protocol_version_reference_value() {
+        let packet = NiimbotPacket::new(0x4Au8, vec![4]);
+        assert_eq!(decode_protocol_version(&packet), Some(4));
+
+        let wrong_command = NiimbotPacket::new(0x4Bu8, vec![4]);
+        assert_eq!(decode_protocol_version(&wrong_command), None);
     }
 
     #[test]

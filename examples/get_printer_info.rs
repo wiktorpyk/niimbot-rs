@@ -14,7 +14,7 @@ use std::time::Duration;
 use log::info;
 
 use niimbot_rs::error::Result;
-use niimbot_rs::protocol::{NiimbotPacket, PrinterInfoType, ResponseCommandId};
+use niimbot_rs::protocol::{decode_printer_info, NiimbotPacket, PrinterInfoType, ResponseCommandId};
 use niimbot_rs::serial_client::{detect_printer_port, open_port, PrinterConnection};
 
 /// How long to wait for a reply to any single request.
@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
 
     for info_type in INFO_TYPES {
         match printer.get_printer_info(*info_type, RESPONSE_TIMEOUT).await {
-            Ok(data) => println!("{info_type:?}: {data:02x?}"),
+            Ok(data) => println!("{info_type:?}: {}", decode_printer_info(*info_type, &data)),
             Err(e) => eprintln!("{info_type:?}: failed ({e})"),
         }
     }

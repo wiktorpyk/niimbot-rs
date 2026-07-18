@@ -134,18 +134,10 @@ async fn run_heartbeat_loop(printer: &mut PrinterConnection) -> Result<()> {
         };
 
         let request = NiimbotPacket::heartbeat(heartbeat_type);
-        // `send_and_wait_recover` already does one round of recovery for
-        // non-fatal failures (wait, resend connect, resend this heartbeat).
-        // So whatever comes back here is either a heartbeat reply or a
-        // failure worth stopping for: either the printer was physically
-        // unplugged (nothing to retry against), or recovery itself failed
-        // (printer reported disconnected, or didn't reply at all).
         let reply = printer
             .send_and_wait_recover(&request, RESPONSE_TIMEOUT, |p| p.response_id().is_heartbeat_reply())
             .await;
 
-        // Using direct print macros instead of log macros so these
-        // messages bypass the RUST_LOG filters and always show up.
         match reply {
             Ok(packet) => match decode_heartbeat(&packet) {
                 Some(data) => println!("heartbeat ok: {data:?}"),
