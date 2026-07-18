@@ -30,77 +30,9 @@ pub enum DecodeError {
     ChecksumMismatch { expected: u8, actual: u8 },
 }
 
-/// Request command IDs (client -> printer).
-///
-/// Only the ones needed for the connect + heartbeat handshake are modeled
-/// here; the full NIIMBOT protocol has many more (label rendering, print
-/// control, etc.) that this crate doesn't implement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum RequestCommandId {
-    /// Request general printer parameters (see [`NiimbotPacket::printer_info`]).
-    PrinterInfo = 0x40,
-    /// Initiate the connect handshake.
-    Connect = 0xC1,
-    /// Poll printer status.
-    Heartbeat = 0xDC,
-}
+mod commands;
 
-impl From<RequestCommandId> for u8 {
-    fn from(id: RequestCommandId) -> Self {
-        id as u8
-    }
-}
-
-/// Response command IDs (printer -> client) relevant to connect + heartbeat.
-///
-/// Unrecognized command bytes are preserved via [`ResponseCommandId::Other`]
-/// rather than being treated as an error, since the printer may reply with
-/// commands this client doesn't otherwise need to understand.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResponseCommandId {
-    /// `0xC2` - reply to [`RequestCommandId::Connect`].
-    Connect,
-    /// `0xDD` - "advanced 1" heartbeat reply.
-    HeartbeatAdvanced1,
-    /// `0xDE` - "basic" heartbeat reply.
-    HeartbeatBasic,
-    /// `0xDF` - heartbeat reply of unknown/unspecified format.
-    HeartbeatUnknown,
-    /// `0xD9` - "advanced 2" heartbeat reply.
-    HeartbeatAdvanced2,
-    /// `0x40` - printer info response (general parameters).
-    PrinterInfo,
-    /// `0x4A` - printer protocol version response.
-    ProtocolVersion,
-    /// Any other command byte, preserved verbatim.
-    Other(u8),
-}
-
-impl From<u8> for ResponseCommandId {
-    fn from(byte: u8) -> Self {
-        match byte {
-            0xC2 => Self::Connect,
-            0xDD => Self::HeartbeatAdvanced1,
-            0xDE => Self::HeartbeatBasic,
-            0xDF => Self::HeartbeatUnknown,
-            0xD9 => Self::HeartbeatAdvanced2,
-            0x40 => Self::PrinterInfo,
-            0x4A => Self::ProtocolVersion,
-            other => Self::Other(other),
-        }
-    }
-}
-
-impl ResponseCommandId {
-    /// True for any of the heartbeat reply variants, regardless of format.
-    pub fn is_heartbeat_reply(self) -> bool {
-        matches!(
-            self,
-            Self::HeartbeatAdvanced1 | Self::HeartbeatBasic | Self::HeartbeatUnknown | Self::HeartbeatAdvanced2
-        )
-    }
-}
+pub use commands::{RequestCommandId, ResponseCommandId};
 
 /// Result byte carried in a [`ResponseCommandId::Connect`] reply's data
 /// payload, indicating the connection state the printer established (or
@@ -188,7 +120,6 @@ pub enum PrinterInfoType {
     LabelType = 3,
     Language = 6,
     AutoShutdownTime = 7,
-    /// See the printer model table in the reference implementation.
     PrinterModelId = 8,
     SoftWareVersion = 9,
     BatteryChargeLevel = 10,
